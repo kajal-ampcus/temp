@@ -1,0 +1,290 @@
+Kitchen Ledger — API Endpoint Documentation,,,,,,,,,,,,,,
+Canteen Inventory Management System  |  Backend: Python + FastAPI  |  Auth: JWT Bearer Token,,,,,,,,,,,,,,
+#,Module,Method,Endpoint,Description,Auth Required,Role(s),Request Headers,Path Params,Query Params,Request Body (JSON),Success Response,Error Responses,Notes / Business Logic,Status
+1,Auth,POST,/api/auth/signup,Register a new user (store manager or chef/admin),No,Public,Content-Type: application/json,—,—,"{
+  ""name"": ""string"",
+  ""email"": ""string (unique)"",
+  ""password"": ""string (min 8 chars)"",
+  ""contact"": ""string"",
+  ""role"": ""store | chef""
+}","201 Created
+{
+  ""id"": ""uuid"",
+  ""name"": ""string"",
+  ""email"": ""string"",
+  ""role"": ""string"",
+  ""created_at"": ""timestamp""
+}","400 – Validation error
+409 – Email already exists
+422 – Invalid role value",Password stored as bcrypt hash. Role assignment should be reviewed—consider restricting 'chef' signup to admin only in production.,? Required
+2,Auth,POST,/api/auth/login,Authenticate user and return JWT access token,No,Public,Content-Type: application/json,—,—,"{
+  ""email"": ""string"",
+  ""password"": ""string""
+}","200 OK
+{
+  ""access_token"": ""string (JWT)"",
+  ""token_type"": ""bearer"",
+  ""user"": { ""id"", ""name"", ""email"", ""role"" }
+}","400 – Missing fields
+401 – Invalid credentials
+404 – User not found","JWT should include user id, role, and expiry (recommend 8h). Store role in payload to avoid extra DB calls on auth middleware.",? Required
+3,Auth,POST,/api/auth/logout,Invalidate current JWT token (server-side blocklist),Yes,All,Authorization: Bearer <JWT>,—,—,—,"200 OK
+{ ""message"": ""Logged out successfully"" }","401 – Unauthorized / token missing
+400 – Token already invalid","If using stateless JWT, maintain a server-side token blocklist (Redis recommended) or rely on token expiry.",? Required
+4,Auth,GET,/api/auth/me,Get currently authenticated user's profile,Yes,All,Authorization: Bearer <JWT>,—,—,—,"200 OK
+{
+  ""id"": ""uuid"",
+  ""name"": ""string"",
+  ""email"": ""string"",
+  ""role"": ""string"",
+  ""contact"": ""string"",
+  ""created_at"": ""timestamp""
+}",401 – Unauthorized,Used on app load to restore session. Returns full user profile.,? Required
+5,Vendors,GET,/api/vendors,List all vendors with their details,Yes,"store, chef",Authorization: Bearer <JWT>,—,"search=string (optional)
+page=int (default 1)
+limit=int (default 20)",—,"200 OK
+{
+  ""data"": [ { vendor objects } ],
+  ""total"": int,
+  ""page"": int,
+  ""limit"": int
+}",401 – Unauthorized,Supports optional search by vendor name. Pagination recommended for large datasets.,? Required
+6,Vendors,GET,/api/vendors/:id,Get single vendor by UUID,Yes,"store, chef",Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ full vendor object with supplied_items array }","401 – Unauthorized
+404 – Vendor not found",Returns full detail including supplied_items (array of category names) and purchase history if joined.,? Required
+7,Vendors,POST,/api/vendors,Create a new vendor record,Yes,store,Authorization: Bearer <JWT>,—,—,"{
+  ""name"": ""string"",
+  ""contact"": ""string"",
+  ""address"": ""string"",
+  ""supplied_items"": [""Grains"", ""Dairy""]
+}","201 Created
+{ newly created vendor object }","400 – Validation error
+401 – Unauthorized
+403 – Forbidden (chef role)
+409 – Vendor name duplicate",Only store manager can create vendors. supplied_items should match category names in categories table.,? Required
+8,Vendors,PUT,/api/vendors/:id,Update existing vendor details,Yes,store,Authorization: Bearer <JWT>,id: UUID,—,"{
+  ""name""?: ""string"",
+  ""contact""?: ""string"",
+  ""address""?: ""string"",
+  ""supplied_items""?: [""string""]
+}","200 OK
+{ updated vendor object }","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+404 – Not found",Partial update supported. All fields optional.,? Required
+9,Vendors,DELETE,/api/vendors/:id,Soft-delete a vendor record,Yes,store,Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ ""message"": ""Vendor deleted"" }","401 – Unauthorized
+403 – Forbidden
+404 – Not found
+409 – Vendor linked to existing batches",Recommend soft delete (add is_active flag). Block delete if vendor has associated batch records.,? Required
+10,Products,GET,/api/products,List all products (items used in kitchen) we have to get the batches also for that specific product,Yes,"store, chef",Authorization: Bearer <JWT>,—,"category=string (optional)
+search=string (optional)
+page=int
+limit=int",—,"200 OK
+{ ""data"": [ product objects ], ""total"": int }",401 – Unauthorized,Filter by category for quick lookup. Include current_stock (sum of remaining_quantity from batches) as computed field.,? Required
+11,Products,GET,/api/products/:id,Get single product with batch summary,Yes,"store, chef",Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{
+  product fields +
+  ""total_stock"": decimal,
+  ""batches"": [ batch summaries ]
+}","401 – Unauthorized
+404 – Not found",Useful for stock detail view. Optionally include expiry-soonest batch.,? Required
+12,Products,POST,/api/products,Create a new product/item master record,Yes,store,Authorization: Bearer <JWT>,—,—,"{
+  ""name"": ""string"",
+  ""category"": ""string"",  
+:""brand_name"" : ""string""
+  ""unit_type"": ""KG | Gram | Litre | Piece | Packet"",
+  ""shelf_life"": int (days),
+  ""min_stock_level"": decimal
+}","201 Created
+{ new product object }","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+409 – Product name duplicate",min_stock_level drives low-stock alerts on dashboard. category must match categories master.,? Required
+13,Products,PUT,/api/products/:id,Update product details,Yes,store,Authorization: Bearer <JWT>,id: UUID,—,"{
+  ""name""?: ""string"",
+  ""category""?: ""string"",
+  ""unit_type""?: ""string"",
+  ""shelf_life""?: int,
+  ""min_stock_level""?: decimal
+}","200 OK
+{ updated product object }","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+404 – Not found",Partial update. Changing unit_type should warn if active batches exist.,? Required
+14,Products,DELETE,/api/products/:id,Delete product master record,Yes,store,Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ ""message"": ""Product deleted"" }","401 – Unauthorized
+403 – Forbidden
+404 – Not found
+409 – Active batches exist",Block delete if product has active inventory batches or pending requests.,? Required
+15,Batches,GET,/api/batches,List all stock intake batches,Yes,"store, chef",Authorization: Bearer <JWT>,—,"productId=UUID (optional)
+vendorId=UUID (optional)
+expiringWithin=int (days, optional)
+page=int
+limit=int",—,"200 OK
+{ ""data"": [ batch objects ], ""total"": int }",401 – Unauthorized,"expiringWithin filter powers expiry alerts (e.g., ?expiringWithin=7 or 30). Include product and vendor names via JOIN.",? Required
+16,Batches,GET,/api/batches/product_id,Get single batch detail,Yes,"store, chef",Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ full batch object with product and vendor info }","401 – Unauthorized
+404 – Not found","Shows original quantity, remaining_quantity, purchase price, expiry.",? Required
+17,Batches,POST,/api/batches,Record new stock purchase (single or bulk),Yes,store,Authorization: Bearer <JWT>,—,—,"// Single:
+{
+  ""product_id"": ""uuid"",
+  ""vendor_id"": ""uuid"",
+""category"" : ""string"",
+""brand_name"" : ""string"",
+  ""quantity"": decimal,
+  ""price_per_unit"": decimal,
+  ""received_date"": ""YYYY-MM-DD"",
+  ""expiry_date"": ""YYYY-MM-DD""
+}
+
+// Bulk (array of above objects)","201 Created
+{ batch object } or [ array of batch objects ]","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+422 – expiry_date < received_date",remaining_quantity initialized = quantity. Supports bulk intake (array body) for multi-item purchase entries.,? Required
+18,Dashboard - store,GET,/api/dashboard-store/expiry-alerts,Get all prduc expired,Yes,"store, chef",Authorization: Bearer <JWT>,—,days=int (default 30),—,"200 OK
+{
+  ""products "" : ""object""
+}",401 – Unauthorized,?? ADDITIONAL ENDPOINT recommended. Powers expiry alert widget on dashboard. Grouped by expired vs expiring_soon.,?? Add
+19,Requests-chef -store,GET,/api/requests,List all stock requests,Yes,"store, chef",Authorization: Bearer <JWT>,—,"status=pending|approved|rejected|issued
+productId=UUID (optional)
+startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD
+page=int
+limit=int",—,"200 OK
+{ ""data"": [ request objects ], ""total"": int }",401 – Unauthorized,Store manager sees all requests they created. Chef sees all requests for approval. Date range filter for reports.,? Required
+20,Requests,GET,/api/requests/:id,Get single request details,Yes,"store, chef",Authorization: Bearer <JWT>,id: REQ-XXX,—,—,"200 OK
+{
+  full request object +
+  ""product"": { name, unit_type },
+  ""requester"": { name, role }
+}","401 – Unauthorized
+404 – Not found",Include product and requester details via JOIN for display.,? Required
+21,Requests,POST,/api/requests,Create one or more stock requests,Yes,store,Authorization: Bearer <JWT>,—,—,"// Single:
+{
+  ""product_id"": ""uuid"",
+""category_id: : ""uuid"",
+  ""quantity"": decimal,
+  ""reason"": ""string"",
+""requested_by""  : ""string"",
+  ""priority"": ""high | medium | low"",
+  ""request_date"": ""YYYY-MM-DD""
+}
+// Bulk: array of above","201 Created
+{ request object with status: ""pending"" }
+Notification sent to chef/admin","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+422 – Requested qty > available stock",Auto-generates REQ-XXX ID. Sets status=pending. Triggers notification to all chef-role users.,? Required
+22,Requests - STORE -CHEF,PATCH,/api/requests/:id,Update request — edit qty OR approve/reject,Yes,"store (edit)
+chef (approve/reject)",Authorization: Bearer <JWT>,id: REQ-XXX,—,"// Store edits (status must be pending):
+{
+  ""quantity""?: decimal,
+  ""reason""?: ""string"",
+  ""priority""?: ""string""
+}
+
+// Chef approves/rejects:
+{
+  ""status"": ""approved | rejected"",
+  ""modified_quantity""?: decimal,
+  ""rejection_note""?: ""string""
+}","200 OK
+{ updated request }
+On approval ? stock deducted via FIFO
+On approval ? notification sent to requester","400 – Validation
+401 – Unauthorized
+403 – Wrong role for action
+404 – Not found
+409 – Cannot edit non-pending request","On approval: trigger FIFO batch deduction. If chef modifies quantity, store modified_quantity separately. Trigger notification to requester.",? Required
+23,Requests,DELETE,/api/requests/:id,Recall / cancel a pending request,Yes,store,Authorization: Bearer <JWT>,id: REQ-XXX,—,—,"200 OK
+{ ""message"": ""Request recalled"" }","401 – Unauthorized
+403 – Forbidden or request not in pending state
+404 – Not found",Only allowed while status=pending. Approved/issued requests cannot be deleted.,? Required
+24,Requests,GET,/api/requests/pending-count,Get count of pending requests for badge display,Yes,chef,Authorization: Bearer <JWT>,—,—,—,"200 OK
+{ ""pending_count"": int }",401 – Unauthorized,?? ADDITIONAL ENDPOINT. Powers notification badge on chef dashboard. Lightweight query.,?? Add
+25,Stock Issue,GET,/api/stock-transactions,List all stock transactions (issues + purchases),Yes,"store, chef",Authorization: Bearer <JWT>,—,"type=issue|purchase
+productId=UUID
+startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD
+page=int
+limit=int",—,"200 OK
+{ ""data"": [ transaction objects ], ""total"": int }",401 – Unauthorized,"?? ADDITIONAL ENDPOINT. The schema defines stock_transaction table but no GET endpoint listed. Required for audit trail, reports, and consumption analytics.",?? Add
+26,Notifications,GET,/api/notifications,Get all notifications for current user,Yes,All,Authorization: Bearer <JWT>,—,"read=true|false (optional)
+page=int
+limit=int",—,"200 OK
+{
+  ""data"": [ notification objects ],
+  ""unread_count"": int
+}",401 – Unauthorized,Filter by read status. Include unread_count in response for badge. Order by created_at DESC.,? Required
+27,Notifications,PUT,/api/notifications/:id/read,Mark single notification as read,Yes,All,Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ ""message"": ""Marked as read"" }","401 – Unauthorized
+404 – Not found",Verify notification belongs to authenticated user before updating.,? Required
+28,Notifications,PUT,/api/notifications/read-all,Mark all notifications as read for current user,Yes,All,Authorization: Bearer <JWT>,—,—,—,"200 OK
+{ ""message"": ""All notifications marked as read"", ""updated_count"": int }",401 – Unauthorized,Bulk update WHERE user_id = current user AND read = false.,? Required
+29,Reports,GET,/api/reports/summary,Dashboard KPI metrics — overall summary,Yes,"store, chef",Authorization: Bearer <JWT>,—,"(vendor,category.,stockwise, from date , to date)",—,"200 OK
+{
+  ""total_products"": int,
+  ""total_stock_value"": decimal,
+  ""low_stock_items"": int,
+  ""expiring_soon"": int,
+  ""pending_requests"": int,
+  ""todays_issues"": int
+}",401 – Unauthorized,Powers both Store Manager and Admin dashboards. Role-aware: chef sees pending_approvals instead of pending_requests.,? Required
+30,Reports,GET,/api/reports/stock,Current stock levels report per product,Yes,"store, chef",Authorization: Bearer <JWT>,—,"category=string
+lowStock=bool
+startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD",—,"200 OK
+{ ""data"": [ { product_name, category, unit, total_qty, min_stock, status: ""ok|low|out"" } ] }",401 – Unauthorized,Computes available stock from batches. Flags items below min_stock_level.,? Required
+31,Reports,GET,/api/reports/vendor,Vendor-wise purchase report,Yes,"store, chef",Authorization: Bearer <JWT>,—,"vendorId=UUID (optional)
+startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD",—,"200 OK
+{ ""data"": [ { vendor_name, total_purchases, total_value, items_supplied: [] } ] }",401 – Unauthorized,Aggregates batches by vendor. Useful for vendor performance analysis and purchase history.,? Required
+32,Reports,GET,/api/reports/category,Category-wise consumption and stock report,Yes,"store, chef",Authorization: Bearer <JWT>,—,"startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD",—,"200 OK
+{ ""data"": [ { category, total_stock, consumed_qty, request_count } ] }",401 – Unauthorized,Groups products by category. Helps identify high-consumption categories.,? Required
+33,Reports,GET,/api/reports/consumption,Daily / monthly consumption trend,Yes,"store, chef",Authorization: Bearer <JWT>,—,"productId=UUID (optional)
+groupBy=day|week|month
+startDate=YYYY-MM-DD
+endDate=YYYY-MM-DD",—,"200 OK
+{ ""data"": [ { date, quantity_issued, product_name } ] }",401 – Unauthorized,?? ADDITIONAL ENDPOINT. Not listed but critical for analytics tab and monthly stock usage report mentioned in doc. Derived from stock_transactions.,?? Add
+34,Reports,GET,/api/reports/expiry,Expiry-date based report,Yes,"store, chef",Authorization: Bearer <JWT>,—,"status=expired|expiring (optional)
+days=int (default 30)",—,"200 OK
+{ ""data"": [ { product_name, batch_id, quantity, expiry_date, days_left } ] }",401 – Unauthorized,?? ADDITIONAL ENDPOINT recommended (listed in doc section 6.10 but not in API list). Shows expiry-grouped view for food safety compliance.,?? Add
+35,Categories,GET,/api/categories,List all categories (default + custom),Yes,"store, chef",Authorization: Bearer <JWT>,—,—,—,"200 OK
+{
+  ""defaults"": [""Grains"",""Pulses"",""Dairy"",""Spices"",""Oils"",""Vegetables"",""Beverages""],
+  ""custom"": [ custom category objects ],
+  ""all"": [ combined list ]
+}",401 – Unauthorized,Separating defaults from custom helps UI distinguish protected vs deletable categories.,? Required
+36,Categories,POST,/api/categories,Add a custom category,Yes,store,Authorization: Bearer <JWT>,—,—,"{
+  ""name"": ""string (unique)""
+}","201 Created
+{ ""id"": ""uuid"", ""name"": ""string"", ""is_custom"": true }","400 – Validation
+401 – Unauthorized
+403 – Forbidden
+409 – Category name already exists","is_custom=true marks it as user-created. Default categories (Grains, Dairy, etc.) should be seeded and not deletable.",? Required
+37,Categories,DELETE,/api/categories/:id,Delete a custom category,Yes,store,Authorization: Bearer <JWT>,id: UUID,—,—,"200 OK
+{ ""message"": ""Category deleted"" }","401 – Unauthorized
+403 – Forbidden
+404 – Not found
+409 – Category in use by products",?? ADDITIONAL ENDPOINT. Not in current list but needed for cleanup. Only custom categories (is_custom=true) can be deleted. Block if products reference it.,?? Add
+38,Dashboard - chef,GET,/api/dashboard-chef/low-stock,Products below minimum stock level,Yes,"store, chef",Authorization: Bearer <JWT>,—,—,—,"200 OK
+{ ""data"": [ { product_name, current_qty, min_stock_level, unit,} ] }",401 – Unauthorized,?? ADDITIONAL ENDPOINT. Powers low-stock alert widget on store manager dashboard. Derived from products JOIN batches.,?? Add
+39,Inventory,GET,/api/inventory/valuation,Total inventory value calculation,Yes,chef,Authorization: Bearer <JWT>,—,category=string (optional),—,"200 OK
+{ ""total_value"": decimal, ""by_category"": [ { category, value } ] }",401 – Unauthorized,?? ADDITIONAL ENDPOINT. Doc mentions 'Inventory value' on Admin dashboard. Calculated as SUM(remaining_quantity × price_per_unit) per batch.,?? Add
+40,Reports,GET,/api/reports/card,"To show qty used, wastage cost , purchase cost",,,,,,,,,,
+41,Dashboard - store,GET,/api/dashboard-store/cards,"to show total stock, expiring soon, pending rqst",,,,,,,,,,
+42,Dashboard - chef,GET,/api/dashboard-chef/cards,"to show total rqst, pending, approved , rejected",,,,,,,,,,
+43,Dashboard - chef,GET,/api/dashboard-chef/pending,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+ganesh,"auth,dashboard both",,,,,,,,,,,,,
+shreya,vendors,,,,,,,,,,,,,
+akash,Request,,,,,,,,,,,,,
+Kajal,"chef, reports ",,,,,,,,,,,,,
+nikita,nikita,,,,,,,,,,,,,
